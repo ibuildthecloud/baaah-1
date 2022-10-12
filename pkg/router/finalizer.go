@@ -1,6 +1,8 @@
 package router
 
-import "k8s.io/utils/strings/slices"
+import (
+	"k8s.io/utils/strings/slices"
+)
 
 type FinalizerHandler struct {
 	FinalizerID string
@@ -24,9 +26,32 @@ func (f FinalizerHandler) Handle(req Request, resp Response) error {
 		return nil
 	}
 
-	if len(obj.GetFinalizers()) == 0 || obj.GetFinalizers()[0] != f.FinalizerID {
+	if !slices.Contains(obj.GetFinalizers(), f.FinalizerID) {
 		return nil
 	}
 
-	return f.Next.Handle(req, resp)
+	if err := f.Next.Handle(req, resp); err != nil {
+		return err
+	}
+
+	if !obj.GetDeletionTimestamp().IsZero() {
+		if slices.Contains(obj.GetFinalizers(), f.FinalizerID) {
+			ff := obj.GetFinalizers()
+			for i := 0; i < len(ff); i++ {
+				if ff[i] == f.FinalizerID {
+					ff = append(ff[:i], ff[i+1:]...)
+					i--
+				}
+			}
+			obj.SetFinalizers(ff)
+
+			if err := req.Client.Update(req.Ctx, obj); err != nil {
+				return err
+			}
+
+			resp.Objects(obj)
+		}
+	}
+
+	return nil
 }
